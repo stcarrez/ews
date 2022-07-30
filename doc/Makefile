@@ -1,4 +1,4 @@
-#  Copyright (C) Simon Wright <simon@pushface.org>
+# Copyright (C) 2004-2022 Simon Wright <simon@pushface.org>
 
 # EWS is free software; you can redistribute it and/or modify it under
 # the terms of the GNU General Public License as published by the Free
@@ -72,4 +72,5 @@ clean:
 	$(DEL) ews.aux ews.lof ews.log ews.out ews.pdf ews.tex ews.toc
 	$(DEL) ews_demo* ews_htdocs.*
 	$(DEL) nuweb-generated-stamp
+	$(DEL) HttpInteraction.js favicon.ico ajax.html ajax.js
 .PHONY: clean

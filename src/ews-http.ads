@@ -16,7 +16,8 @@
 --  program; see the files COPYING3 and COPYING.RUNTIME respectively.
 --  If not, see <http://www.gnu.org/licenses/>.
 --
---  Copyright Simon Wright <simon@pushface.org>
+--  Copyright (C) 2003-2022, Simon Wright <simon@pushface.org>
+--  Copyright (C) 2022, Stephane Carrez <Stephane.Carrez@gmail.com>
 
 pragma Ada_2012;
 
@@ -46,7 +47,7 @@ package EWS.HTTP is
                          Terminated : out Boolean);
 
    subtype Method is String;
-   --  GET or POST
+   --  GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH
 
    subtype Version is String;
    --  The HTTP version in use; 1.1 etc
@@ -114,11 +115,15 @@ package EWS.HTTP is
 
    type Contents is access constant String;
    --  The body of an attachment, not including any request parameters
-   --  of header fields.
+   --  or header fields.
+
+   type Content_Kind is (Binary, Text);
 
    function Get_Content (From  : Attachments;
                          Index : Positive    := 1) return Contents;
    --  Get the contents of the Index'th part of the attachment.
+
+   function Get_Content_Kind (From  : Contents) return Content_Kind;
 
 
    --  Text content
@@ -136,13 +141,18 @@ package EWS.HTTP is
    Name_Error : exception renames Ada.IO_Exceptions.Name_Error;
    End_Error : exception renames Ada.IO_Exceptions.End_Error;
 
-   procedure Open (C : in out Cursor;
-                   From : Attachments;
-                   Index : Positive := 1);
+   procedure Open (C     : in out Cursor;
+                   From  :        Attachments;
+                   Index :        Positive := 1);
    --  Open a Cursor on the Index'th part of the attachments.
    --  Propagates Status_Error if the Cursor is already open.
    --  Propagates Name_Error if Index doesn't denote a part of the
    --  attachments.
+
+   procedure Open (C     : in out Cursor;
+                   From  :        Contents);
+   --  Open a Cursor on From.
+   --  Propagates Status_Error if the Cursor is already open.
 
    procedure Close (C : in out Cursor);
    --  Close a Cursor.
@@ -249,10 +259,10 @@ private
 
    type Cursor is limited record
       Open        : Boolean           := False;
-      Line_Ending : Line_Ending_Style;
-      Data        : Attachments;
+      Line_Ending : Line_Ending_Style := Unknown;
+      Data        : Contents;
       Start       : Positive;
-      Finish      : Natural;
+      Last        : Natural;
       Next        : Positive;
    end record;
 
@@ -295,7 +305,8 @@ private
    type Unbounded_Memory_Stream;
    type Unbounded_Memory_Stream_Finalizer
      (UMS : not null access Unbounded_Memory_Stream)
-   is new Ada.Finalization.Limited_Controlled with null record;
+     is new Ada.Finalization.Limited_Controlled with null record;
+   overriding
    procedure Finalize (UMSF : in out Unbounded_Memory_Stream_Finalizer);
 
    type Unbounded_Memory_Stream
@@ -306,12 +317,15 @@ private
       Head      : Stream_Chunk_P;
       Tail      : Stream_Chunk_P;
    end record;
+   not overriding
    procedure Copy  (Stream : Unbounded_Memory_Stream;
                     To     : GNAT.Sockets.Socket_Type);
    --  Read isn't meant to be called; output contents via Copy.
+   overriding
    procedure Read  (Stream : in out Unbounded_Memory_Stream;
                     Item   :    out Ada.Streams.Stream_Element_Array;
                     Last   :    out Ada.Streams.Stream_Element_Offset);
+   overriding
    procedure Write (Stream : in out Unbounded_Memory_Stream;
                     Item   :        Ada.Streams.Stream_Element_Array);
 

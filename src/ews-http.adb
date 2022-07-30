@@ -16,7 +16,8 @@
 --  program; see the files COPYING3 and COPYING.RUNTIME respectively.
 --  If not, see <http://www.gnu.org/licenses/>.
 --
---  Copyright Simon Wright <simon@pushface.org>
+--  Copyright (C) 2003-2022, Simon Wright <simon@pushface.org>
+--  Copyright (C) 2022, Stephane Carrez <Stephane.Carrez@gmail.com>
 
 pragma Ada_2012;
 
@@ -48,10 +49,10 @@ package body EWS.HTTP is
      "(\r\n)?"
      & "(GET|POST|HEAD|PUT|DELETE|OPTIONS|PATCH)" -- request, 2
      & "\s"
-     & "(/|((/[a-z0-9._-]+)+)/?)"               -- the URL, 3
-     & "(\?([^#]*))?"                           -- query, 6
+     & "(/|((/[a-z0-9._-]+)+)/?)"                 -- the URL, 3
+     & "(\?([^#]*))?"                             -- query, 6
      & "\s"
-     & "HTTP/(\d\.\d)"                          -- version, 8
+     & "HTTP/(\d\.\d)"                            -- version, 8
      & "\r\n";
 
    Method_Match : constant := 2;
@@ -372,6 +373,14 @@ package body EWS.HTTP is
    end Get_Content;
 
 
+   function Get_Content_Kind (From  : Contents) return Content_Kind
+   is
+     (if (for some C of From.all => Character'Pos (C) > 127) then
+         Binary
+      else
+         Text);
+
+
    --  Text content
 
    procedure Open (C     : in out Cursor;
@@ -384,16 +393,28 @@ package body EWS.HTTP is
       end if;
       C.Open := True;
       C.Line_Ending := Unknown;
-      C.Data := From;
-      Locate_Whole_Body_Part (From, Index, C.Start, C.Finish);
-      --  Strip the header fields (if any) & the CRLF delimiter
-      --  pair.
-      if C.Finish >= C.Start then
-         C.Start := HTTP.Index
-           (SS.Value (From.Content)(C.Start .. C.Finish), CRLF & CRLF)
-           + 4;
-      end if;
+      C.Data := Get_Content (From, Index);
+      C.Start := C.Data'First;
+      C.Last := C.Data'Last;
       C.Next := C.Start;
+      Determine_Line_Style (C);
+   end Open;
+
+
+   procedure Open (C     : in out Cursor;
+                   From  :        Contents)
+   is
+   begin
+      if C.Open then
+         raise Status_Error;
+      end if;
+      C.Open := True;
+      C.Line_Ending := Unknown;
+      C.Data := From;
+      C.Start := C.Data'First;
+      C.Last := C.Data'Last;
+      C.Next := C.Start;
+      Determine_Line_Style (C);
    end Open;
 
 
@@ -404,7 +425,7 @@ package body EWS.HTTP is
          raise Status_Error;
       end if;
       C.Open := False;
-      Clear (C.Data);
+      --  XXXXXXXXXXXXXXXXXXXXXXXX Clear (C.Data);
    end Close;
 
 
@@ -414,7 +435,7 @@ package body EWS.HTTP is
       if not C.Open then
          raise Status_Error;
       end if;
-      return C.Next > C.Finish;
+      return C.Next > C.Last;
    end End_Of_File;
 
 
@@ -426,12 +447,11 @@ package body EWS.HTTP is
       if not C.Open then
          raise Status_Error;
       end if;
-      if C.Next > C.Finish then
+      if C.Next > C.Last then
          raise End_Error;
       end if;
-      Determine_Line_Style (C);
       declare
-         Text : String renames SS.Value (C.Data.Content).all;
+         Text : String renames C.Data.all;
          CR : constant String := (1 => ASCII.CR);
          LF : constant String := (1 => ASCII.LF);
          Terminator : Natural;
@@ -447,21 +467,35 @@ package body EWS.HTTP is
                Terminator := Index (Text, CR, C.Next);
          end case;
          if Terminator = 0 then
-            --  the whole of the rest of the string is available
-            Terminator := C.Finish + 1;
+            --  NB, this covers the case when there's no line ending
+            --  left. The whole of the rest of the string is
+            --  available
+            Terminator := C.Last + 1;
          end if;
-         Last := Line'First - 1;
-         while C.Next < Terminator loop
-            exit when Last = Line'Last;
-            Last := Last + 1;
-            Line (Last) := Text (C.Next);
-            C.Next := C.Next + 1;
-         end loop;
-         --  skip the LF or CRLF
-         if C.Line_Ending = Unix then
-            C.Next := C.Next + 1;
-         elsif C.Line_Ending = Windows then
-            C.Next := C.Next + 2;
+         declare
+            Source_Length : constant Natural := Terminator - C.Next;
+            Target_Length : constant Natural := Line'Length;
+         begin
+            if Source_Length = 0 then
+               Last := Line'First - 1;
+            elsif Source_Length <= Target_Length then
+               Last := Line'First + Source_Length - 1;
+               Line (Line'First .. Line'First + Source_Length - 1)
+                 := Text (C.Next .. C.Next + Source_Length - 1);
+               C.Next := C.Next + Source_Length;
+            else
+               Last := Line'Last;
+               Line := Text (C.Next .. C.Next + Target_Length - 1);
+               C.Next := C.Next + Target_Length;
+            end if;
+         end;
+         --  skip pending LF or CRLF
+         if C.Next <= C.Last then
+            if C.Line_Ending = Unix and then Text (C.Next) = LF (1) then
+               C.Next := C.Next + 1;
+            elsif C.Line_Ending = Windows and then Text (C.Next) = CR (1) then
+               C.Next := C.Next + 2;
+            end if;
          end if;
       end;
    end Get_Line;
@@ -594,7 +628,9 @@ package body EWS.HTTP is
    type Not_Found_Response (To : Request_P)
    is new Response (To) with null record;
 
+   overriding
    function Response_Kind (This : Not_Found_Response) return String;
+   overriding
    function Content (This : Not_Found_Response) return String;
 
    function Not_Found
@@ -607,7 +643,9 @@ package body EWS.HTTP is
    type Not_Implemented_Response (To : Request_P)
    is new Response (To) with null record;
 
+   overriding
    function Response_Kind (This : Not_Implemented_Response) return String;
+   overriding
    function Content (This : Not_Implemented_Response) return String;
 
    function Not_Implemented
@@ -622,7 +660,9 @@ package body EWS.HTTP is
          Info : Str.Bounded_String;
    end record;
 
+   overriding
    function Response_Kind (This : Exception_Response_T) return String;
+   overriding
    function Content (This : Exception_Response_T) return String;
 
    function Exception_Response
@@ -651,7 +691,7 @@ package body EWS.HTTP is
 
    procedure Determine_Line_Style (Used_In : in out Cursor)
    is
-      Text : String renames SS.Value (Used_In.Data.Content).all;
+      Text : String renames Used_In.Data.all;
       CR : constant String := (1 => ASCII.CR);
       LF : constant String := (1 => ASCII.LF);
    begin
